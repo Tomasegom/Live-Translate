@@ -11,6 +11,7 @@ In this branch I'll test including some external translators so more languages a
 '''
 
 # Settings
+
 samplerate = 16000
 block_duration = 0.5  # Seconds
 chunk_duration = 2    # Seconds
@@ -25,6 +26,9 @@ stop_flag = False  # Variable global de control
 
 # Model Setup
 model = WhisperModel("large-v3", device="cuda", compute_type="float16")
+
+target_language = "en"
+translator = GoogleTranslator(source='es',target=target_language)
 
 def audio_callback(indata, frames, time, status):
     if status:
@@ -57,17 +61,22 @@ def transcriber():
             audio_data = audio_data.flatten().astype(np.float32)
 
             # Transcription con VAD activado
+            # Como vamos a usar un externo para traducir, solo necesitamos transcribir esta vez
             segments, _ = model.transcribe(
                 audio_data,
-                task="translate",   # Traduce a inglés - Faster Whisper nativamente solo traduce a ingles
+                task="transcribe",
                 language="es",      # Audio original en español
                 beam_size=1,
                 vad_filter=True
             )
 
-
             for segment in segments:
-                print(f"{segment.text}")
+                original_text = segment.text.strip()
+                if original_text:
+                    translated_text = translator.translate(original_text)
+                #Opcional: texto original & traducido
+                #print(f'[ES] {original_text}')
+                print(f"[{target_language}] {translated_text}") #Imprime el texto ya traducido
 
 
 def key_listener():
