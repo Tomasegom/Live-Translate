@@ -4,6 +4,11 @@ import queue
 import threading
 import keyboard
 from faster_whisper import WhisperModel
+from deep_translator import GoogleTranslator
+
+'''
+In this branch I'll test including some external translators so more languages are available
+'''
 
 # Settings
 samplerate = 16000
