@@ -13,6 +13,17 @@ Installs needed: (as of Aug, 2025)
 Working settings: (In a HP Victus Ryzen 7 7700 - RTX 4050)
     model = WhisperModel("large-v3", device="cuda", compute_type="float16")
 
+    
+    GoogleTranslator → ✅ Más rápido y estable, porque usa el endpoint web de Google Translate (no oficial).
+    MyMemoryTranslator → También rápido, pero puede devolver traducciones menos precisas.
+    MicrosoftTranslator → Requiere API key de Azure, pero cuando está configurado es muy rápido y confiable.
+    DeeplTranslator → Traducciones muy buenas, pero suele ser más lento y requiere API key.
+    PapagoTranslator (Naver, usado en Corea) → Rápido, pero más limitado en idiomas.
+    YandexTranslator → Necesita API key, velocidad aceptable, soporte decente.
+    Pons / Linguee → Más orientados a diccionario/bilingüismo, no tanto traducción de frases completas.
+    QcriTranslator → Menos usado, puede ser lento.
+    ChatGptTranslator → Depende de la API de OpenAI → mucho más lento y caro que los demás para uso en tiempo real.
+
 FASTER WHISPER (LISTEN ONLY) accepted language codes: 
     af, am, ar, as, az, ba, be, bg, bn, bo, br, bs, ca, cs, cy, da, de, el, en, es, 
     et, eu, fa, fi, fo, fr, gl, gu, ha, haw, he, hi, hr, ht, hu, hy, id, is, it, ja, jw, ka, kk, km, kn, ko, 
