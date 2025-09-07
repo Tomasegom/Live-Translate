@@ -1,3 +1,5 @@
+Tested succesfully for 50 minutes straight with youtube video
+
 Installs needed: (as of Aug, 2025)
     cuDNN 9 for CUDA 12: https://developer.nvidia.com/cudnn
     cuBLAS for CUDA 12 (Linux): https://developer.nvidia.com/cublas
