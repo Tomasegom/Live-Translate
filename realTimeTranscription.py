@@ -10,8 +10,8 @@ from silero_vad import get_speech_timestamps, collect_chunks
 
 # Settings
 samplerate = 16000
-block_duration = 0.5  # Seconds
-chunk_duration = 2    # Seconds
+block_duration = 0.25  # Seconds, cuanto tiempo necesita para enviar al chunk y llenarlo para transcribir/traducirq
+chunk_duration = 3    # Seconds, es por cuanto tiempo whisper va a escuchar antes de transcribir y traducir
 channels = 1
 
 frames_per_block = int(samplerate * block_duration)
@@ -76,10 +76,10 @@ def transcriber():
 
             # Transcription con VAD activado
             segments, _ = model.transcribe(
-                audio_data,
+                speech_np,
                 task="translate",   # Traduce a inglés - Faster Whisper nativamente solo traduce a ingles
-                language="es",      # Audio original en español
-                beam_size=1,
+                language="en",      # Audio original en español
+                beam_size=5,        # Intenta predecir y ver cual es mas apta, causa delay si es my grande
                 vad_filter=False
             )
 
