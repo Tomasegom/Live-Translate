@@ -1,9 +1,12 @@
+import torchaudio
+import torch
 import sounddevice as sd
 import numpy as np
 import queue
 import threading
 import keyboard
 from faster_whisper import WhisperModel
+from silero_vad import get_speech_timestamps, collect_chunks
 
 # Settings
 samplerate = 16000
@@ -20,6 +23,14 @@ stop_flag = False  # Variable global de control
 
 # Model Setup
 model = WhisperModel("large-v3", device="cuda", compute_type="float16")
+
+vad_model, utils = torch.hub.load(
+    repo_or_dir="snakers4/silero-vad",
+    model="silero_vad",
+    force_reload=False
+)
+(get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
+
 
 def audio_callback(indata, frames, time, status):
     if status:
@@ -50,6 +61,18 @@ def transcriber():
             audio_buffer = []  # Clears buffer
 
             audio_data = audio_data.flatten().astype(np.float32)
+            
+            # Silero VAD
+            
+            wav_tensor = torch.from_numpy(audio_data)
+            timestamps = get_speech_timestamps(wav_tensor, vad_model, sampling_rate=samplerate)
+
+            if not timestamps:
+                # no se detectó voz → ignorar chunk
+                continue
+            
+            speech_tensor = collect_chunks(timestamps, wav_tensor)
+            speech_np = speech_tensor.numpy().astype(np.float32)
 
             # Transcription con VAD activado
             segments, _ = model.transcribe(
@@ -57,7 +80,7 @@ def transcriber():
                 task="translate",   # Traduce a inglés - Faster Whisper nativamente solo traduce a ingles
                 language="es",      # Audio original en español
                 beam_size=1,
-                vad_filter=True
+                vad_filter=False
             )
 
 
