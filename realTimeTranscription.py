@@ -58,7 +58,9 @@ def transcriber():
 
         if total_frames >= frames_per_chunk:
             audio_data = np.concatenate(audio_buffer)[:frames_per_chunk]
-            audio_buffer = []  # Clears buffer
+            overlap = int(0.5 * samplerate)
+            audio_buffer = [audio_data[-overlap:]]  # Clears buffer & overlaps past audio a bit
+            # Para evitar frases sin sentido al final (TBTested)
 
             audio_data = audio_data.flatten().astype(np.float32)
             
@@ -72,13 +74,20 @@ def transcriber():
                 continue
             
             speech_tensor = collect_chunks(timestamps, wav_tensor)
+            if speech_tensor.numel() == 0:
+                continue
+            
             speech_np = speech_tensor.numpy().astype(np.float32)
+            speech_np /= np.max(np.abs(speech_np)) + 1e-9
+            
+            if len(speech_np) < 0.5 * samplerate: # Evitamos chunks muy cortos
+                continue
 
             # Transcription con VAD activado
             segments, _ = model.transcribe(
                 speech_np,
                 task="translate",   # Traduce a inglés - Faster Whisper nativamente solo traduce a ingles
-                language="en",      # Audio original en español
+                language="es",      # Audio original en español
                 beam_size=5,        # Intenta predecir y ver cual es mas apta, causa delay si es my grande
                 vad_filter=False
             )
