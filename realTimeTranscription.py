@@ -8,20 +8,25 @@ import keyboard
 from faster_whisper import WhisperModel
 from silero_vad import get_speech_timestamps, collect_chunks
 
-# Settings
+# ==============================
+# CONFIGURACIÓN
+# ==============================
 samplerate = 16000
-block_duration = 0.25  # Seconds, cuanto tiempo necesita para enviar al chunk y llenarlo para transcribir/traducirq
-chunk_duration = 3    # Seconds, es por cuanto tiempo whisper va a escuchar antes de transcribir y traducir
-channels = 1
+block_duration = 0.5   # tamaño de cada bloque (segundos)
+chunk_duration = 3     # duración de cada chunk a transcribir, tiempo en llenar (segundos)
+channels = 1           # 1: mono, 2: stereo (Para live translation es mejor 1)
 
 frames_per_block = int(samplerate * block_duration)
 frames_per_chunk = int(samplerate * chunk_duration)
 
 audio_queue = queue.Queue()
 audio_buffer = []
-stop_flag = False  # Variable global de control
+stop_flag = False       # bandera global -> se pone en True al presionar Q
+last_text = ""          # evita repeticiones seguidas
 
-# Model Setup
+# ==============================
+# MODELOS
+# ==============================
 model = WhisperModel("large-v3", device="cuda", compute_type="float16")
 
 vad_model, utils = torch.hub.load(
@@ -32,24 +37,35 @@ vad_model, utils = torch.hub.load(
 (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
 
 
+# ==============================
+# CALLBACK DE AUDIO
+# ==============================
 def audio_callback(indata, frames, time, status):
     if status:
-        print(status)
+        print("Error:", status)
     audio_queue.put(indata.copy())
-    
+
+
+# ==============================
+# RECORDER: toma audio del micro
+# ==============================
 def recorder():
     global stop_flag
-    with sd.InputStream(samplerate=samplerate, channels=channels, 
+    with sd.InputStream(samplerate=samplerate, channels=channels,
                         callback=audio_callback, blocksize=frames_per_block):
-        print("Listening... (press Q to Stop)")
-        while not stop_flag:
+        print("Listening... (press Q to stop)")
+        while not stop_flag:   # mientras no se haya presionado Q
             sd.sleep(100)
 
+
+# ==============================
+# TRANSCRIBER: procesa audio y transcribe
+# ==============================
 def transcriber():
-    global audio_buffer, stop_flag
-    while not stop_flag:
+    global audio_buffer, stop_flag, last_text
+    while not stop_flag:   # sale cuando se presiona Q
         try:
-            block = audio_queue.get(timeout=0.1)  # evita bloqueo infinito
+            block = audio_queue.get(timeout=0.1)
         except queue.Empty:
             continue
 
@@ -59,51 +75,73 @@ def transcriber():
         if total_frames >= frames_per_chunk:
             audio_data = np.concatenate(audio_buffer)[:frames_per_chunk]
             overlap = int(0.5 * samplerate)
-            audio_buffer = [audio_data[-overlap:]]  # Clears buffer & overlaps past audio a bit
-            # Para evitar frases sin sentido al final (TBTested)
+            audio_buffer = [audio_data[-overlap:]]  # mantiene un poco de contexto
 
             audio_data = audio_data.flatten().astype(np.float32)
-            
-            # Silero VAD
-            
+
+            # VAD (detección de voz con Silero)
             wav_tensor = torch.from_numpy(audio_data)
-            timestamps = get_speech_timestamps(wav_tensor, vad_model, sampling_rate=samplerate)
+            timestamps = get_speech_timestamps(
+                wav_tensor,
+                vad_model,
+                sampling_rate=samplerate,
+            )
+
+            def is_voice(audio, threshold=0.02):
+                energy = np.sqrt(np.mean(audio**2))
+                return energy > threshold
 
             if not timestamps:
-                # no se detectó voz → ignorar chunk
                 continue
-            
+
             speech_tensor = collect_chunks(timestamps, wav_tensor)
             if speech_tensor.numel() == 0:
                 continue
-            
+
             speech_np = speech_tensor.numpy().astype(np.float32)
             speech_np /= np.max(np.abs(speech_np)) + 1e-9
-            
-            if len(speech_np) < 0.5 * samplerate: # Evitamos chunks muy cortos
+
+            if len(speech_np) < 0.5 * samplerate:
                 continue
 
-            # Transcription con VAD activado
+            # Transcripción
             segments, _ = model.transcribe(
                 speech_np,
-                task="translate",   # Traduce a inglés - Faster Whisper nativamente solo traduce a ingles
-                language="es",      # Audio original en español
-                beam_size=5,        # Intenta predecir y ver cual es mas apta, causa delay si es my grande pero aumenta precision
+                task="translate",   # traduce a inglés
+                language="es",      # audio original en español
+                beam_size=3,
                 vad_filter=False
             )
 
-
             for segment in segments:
-                print(f"{segment.text}")
+                text = segment.text.strip()
+
+                # Filtros de calidad
+                if segment.no_speech_prob > 0.6:
+                    continue
+                if text.lower() == last_text.lower():
+                    continue
+                if not is_voice(speech_np, threshold=0.02):
+                    continue
+
+                # Mostrar texto válido
+                print(text)
+                last_text = text
 
 
+# ==============================
+# KEY LISTENER: espera la tecla Q
+# ==============================
 def key_listener():
     global stop_flag
-    keyboard.wait("q")   # espera a que presiones "q"
-    stop_flag = True
-    print("\nPrograma terminado por el usuario.")
+    keyboard.wait("q")       # se queda esperando
+    stop_flag = True         # al presionar Q, todo se detiene
+    print("\n Program finished.")
 
-# Start threads
+
+# ==============================
+# INICIO DE THREADS
+# ==============================
 threading.Thread(target=recorder, daemon=True).start()
 threading.Thread(target=key_listener, daemon=True).start()
-transcriber()
+transcriber()  # corre en el hilo principal
