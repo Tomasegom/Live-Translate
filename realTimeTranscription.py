@@ -88,7 +88,7 @@ def transcriber():
                 speech_np,
                 task="translate",   # Traduce a inglés - Faster Whisper nativamente solo traduce a ingles
                 language="es",      # Audio original en español
-                beam_size=5,        # Intenta predecir y ver cual es mas apta, causa delay si es my grande
+                beam_size=5,        # Intenta predecir y ver cual es mas apta, causa delay si es my grande pero aumenta precision
                 vad_filter=False
             )
 
