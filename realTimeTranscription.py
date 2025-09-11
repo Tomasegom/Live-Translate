@@ -85,9 +85,12 @@ def transcriber():
                 wav_tensor,
                 vad_model,
                 sampling_rate=samplerate,
+                threshold=0.7,
+                min_speech_duration_ms=400, #evita pedazos cortos
+                min_silence_duration_ms=250 #hay silencio entre frases
             )
 
-            def is_voice(audio, threshold=0.02):
+            def is_voice(audio, threshold=0.04):
                 energy = np.sqrt(np.mean(audio**2))
                 return energy > threshold
 
@@ -109,7 +112,7 @@ def transcriber():
                 speech_np,
                 task="translate",   # traduce a inglés
                 language="es",      # audio original en español
-                beam_size=3,
+                beam_size=5,
                 vad_filter=False
             )
 
@@ -117,11 +120,19 @@ def transcriber():
                 text = segment.text.strip()
 
                 # Filtros de calidad
-                if segment.no_speech_prob > 0.6:
+                if len(text) < 2:
+                    print("[...]")
+                    continue
+                if segment.no_speech_prob > 0.6: # 0 - 1 Entre mas alto, menos ruido pasa
+                    print("[...]")
                     continue
                 if text.lower() == last_text.lower():
                     continue
-                if not is_voice(speech_np, threshold=0.02):
+                if not is_voice(speech_np, threshold=0.02): # RMS threshold for voice (0.02 - 0.1)
+                    continue
+                #Filtro por eco (si se repite muchas veces una palabra)(bocinas repitiendo)
+                unique_ratio = len(set(text.split())) / (len(text.split()) + 1e-9)
+                if unique_ratio < 0.5:   # demasiada repetición -> probable eco/ruido
                     continue
 
                 # Mostrar texto válido
