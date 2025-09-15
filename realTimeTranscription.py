@@ -6,7 +6,6 @@ import queue
 import threading
 import keyboard
 import noisereduce as nr
-import webrtcvad
 from collections import deque
 from faster_whisper import WhisperModel
 from silero_vad import get_speech_timestamps, collect_chunks
@@ -18,32 +17,28 @@ samplerate = 16000
 
 # Captura y segmentación
 block_duration = 0.35        # s (bloques del mic)
-chunk_duration = 2.5         # s (ventana a transcribir)
-overlap_seconds = 0.7        # s (contexto para no cortar frases)
+chunk_duration = 3           # s (ventana a transcribir)
+overlap_seconds = 0.5        # s (contexto para no cortar frases)
 channels = 1
 
 # Limpieza de audio
 use_noise_reduction = True   # activar/desactivar noisereduce
-target_rms = 0.055            # ~ -26 dBFS aprox (0.03-0.07 recomendado)
+target_rms = 0.06            # normalización RMS objetivo (~ -26 dBFS)
 
-# VADs
-silero_threshold = 0.70      # 0.6–0.75 (más alto = más estricto)
-silero_min_speech_ms = 400
-silero_min_silence_ms = 250
-
-webrtc_aggressiveness = 2    # 0 permisivo .. 3 estricto
-webrtc_frame_ms = 20         # 10/20/30 ms válidos
-webrtc_min_voiced_ratio = 0.5 # % de frames con voz dentro del chunk (0.3–0.6)
+# VAD Silero
+silero_threshold = 0.70         # 0.6–0.75 (más alto = más estricto)
+silero_min_speech_ms = 400      # mínimo de voz 
+silero_min_silence_ms = 500     # silencio para marcar fin de frase 
 
 # Whisper
 whisper_task = "translate"   # "translate" => SIEMPRE inglés; "transcribe" => mismo idioma
 whisper_lang = "es"          # idioma del audio de entrada
 
-# Filtros de texto
+# Filtros de texto y audio
 no_speech_prob_thresh = 0.60
 unique_ratio_thresh = 0.50   # repetición de palabras
-#blacklist = {"i don't know", "thank you", "ok", "okay", "gracias", "mmm", "uh"}
-dedupe_window = 3            # recuerda N últimas salidas para evitar repetidos
+dedupe_window = 4            # recuerda N últimas salidas para evitar repetidos
+rms_threshold = 0.035        
 
 # ==============================
 # DERIVADOS
@@ -61,15 +56,17 @@ recent_texts = deque(maxlen=dedupe_window)
 # MODELOS
 # ==============================
 model = WhisperModel("large-v3", device="cuda", compute_type="float16")
+#model = WhisperModel("medium", device="cuda", compute_type="float16")
 
 # Silero
 vad_model, utils = torch.hub.load(
-    repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False
+    "snakers4/silero-vad",
+    "silero_vad",
+    trust_repo=True,
+    force_reload=False,
+    skip_validation=True
 )
 (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
-
-# WebRTC
-webrtc_vad = webrtcvad.Vad(webrtc_aggressiveness)
 
 # ==============================
 # UTILIDADES AUDIO
@@ -87,27 +84,11 @@ def remove_dc_and_normalize(x: np.ndarray, target=target_rms):
 def apply_noise_reduction(x: np.ndarray):
     if not use_noise_reduction:
         return x
-    # noisereduce asume float32 [-1,1]; usar con cuidado (latencia extra)
     return nr.reduce_noise(y=x, sr=samplerate)
 
-def webrtc_voiced_ratio(x: np.ndarray) -> float:
-    """Evalúa varios frames consecutivos con WebRTC VAD y retorna la fracción con voz."""
-    # WebRTC VAD requiere PCM16 mono a 8/16/32/48 kHz y frames 10/20/30 ms
-    pcm16 = (np.clip(x, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
-    bytes_per_frame = int(samplerate * webrtc_frame_ms / 1000) * 2  # 2 bytes (int16)
-    if len(pcm16) < bytes_per_frame:
-        return 0.0
-    n_frames = len(pcm16) // bytes_per_frame
-    voiced = 0
-    for i in range(n_frames):
-        frame = pcm16[i * bytes_per_frame : (i + 1) * bytes_per_frame]
-        try:
-            if webrtc_vad.is_speech(frame, samplerate):
-                voiced += 1
-        except Exception:
-            # Si falla por frame inválido, lo ignoramos
-            pass
-    return voiced / max(1, n_frames)
+def is_voice(x: np.ndarray, threshold=rms_threshold):
+    energy = np.sqrt(np.mean(x**2))
+    return energy > threshold
 
 # ==============================
 # CALLBACK DE AUDIO
@@ -124,7 +105,7 @@ def recorder():
     global stop_flag
     with sd.InputStream(samplerate=samplerate, channels=channels,
                         callback=audio_callback, blocksize=frames_per_block):
-        print(f"Listening… (press Q to stop)")
+        print("Listening… (press Q to stop)")
         while not stop_flag:
             sd.sleep(50)
 
@@ -143,16 +124,16 @@ def transcriber():
         total_frames = sum(len(b) for b in audio_buffer)
 
         if total_frames >= frames_per_chunk:
-            # Concat, overlap para contexto
+            # Concat + overlap para contexto
             audio_data = np.concatenate(audio_buffer)[:frames_per_chunk]
             audio_buffer = [audio_data[-overlap_frames:]]  # conserva cola
 
-            # Aplanar → limpieza → (opcional) NR
+            # Aplanar → limpieza
             audio_data = audio_data.flatten().astype(np.float32)
             audio_data = remove_dc_and_normalize(audio_data, target=target_rms)
             audio_data = apply_noise_reduction(audio_data)
 
-            # ===== VAD 1: Silero =====
+            # ===== VAD: Silero =====
             wav_tensor = torch.from_numpy(audio_data)
             timestamps = get_speech_timestamps(
                 wav_tensor,
@@ -170,15 +151,13 @@ def transcriber():
                 continue
 
             speech_np = speech_tensor.numpy().astype(np.float32)
-            # Normaliza cada recorte de voz también (ayuda con volumen variable)
             speech_np = remove_dc_and_normalize(speech_np, target=target_rms)
 
-            # ===== VAD 2: WebRTC (multi-frame) =====
-            voiced_ratio = webrtc_voiced_ratio(speech_np)
-            if voiced_ratio < webrtc_min_voiced_ratio:
+            # RMS filter
+            if not is_voice(speech_np):
                 continue
 
-            # Longitud mínima útil (evitar aplausos o chasquidos)
+            # Longitud mínima útil
             if len(speech_np) < int(0.5 * samplerate):
                 continue
 
@@ -188,32 +167,21 @@ def transcriber():
                 task=whisper_task,
                 language=whisper_lang,
                 beam_size=4,
-                vad_filter=False  # usamos Silero+WebRTC
+                vad_filter=False
             )
 
             for seg in segments:
                 text = seg.text.strip()
 
                 # ===== Filtros de salida =====
-                # 1) confianza de "no speech"
                 if seg.no_speech_prob is not None and seg.no_speech_prob > no_speech_prob_thresh:
                     continue
-
-                # 2) palabras mínimas
                 if len(text.split()) < 2:
                     continue
-
-                # 3) blacklist de muletillas comunes
-                '''if text.lower() in blacklist:
-                    continue'''
-
-                # 4) repetición (eco/loop por bocinas)
                 words = text.split()
                 unique_ratio = len(set(words)) / (len(words) + 1e-9)
                 if unique_ratio < unique_ratio_thresh:
                     continue
-
-                # 5) dedupe por ventana reciente
                 if text.lower() in (t.lower() for t in recent_texts):
                     continue
 
