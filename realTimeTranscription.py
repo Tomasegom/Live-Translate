@@ -286,30 +286,31 @@ class STTApp(QWidget):
         # guardar historial
         self.all_texts.append(text)
 
-        # anteriores (arriba, estilo más discreto)
+        # anteriores → se apilan arriba (más chicos y grises)
         previous_html = ""
         for t in self.all_texts[:-1]:
-            previous_html += f"<p style='color:#555555; font-size:25px; margin:2px 0;'>{t}</p>"
+            previous_html += f"<p style='color:#888888; font-size:25px; margin:2px 0;'>{t}</p>"
 
-        # último (centrado en la caja)
+        # último → siempre fijo en el centro
         last_html = f"""
-        <div style='display:flex; justify-content:center; align-items:center; height:60%;'>
+        <div style='display:flex; justify-content:center; align-items:center; height:100%;'>
             <p style='color:{self.HIGHLIGHT_COLOR}; font-weight:bold; font-size:50px; text-align:center;'>
                 {self.all_texts[-1]}
             </p>
         </div>
         """
 
-        # construir contenido
-        html_content = previous_html + last_html
+        # construir el contenido final
+        html_content = f"""
+        <div style='height:35%; overflow-y:auto;'>
+            {previous_html}
+        </div>
+        <div style='height:65%; display:flex; justify-content:center; align-items:center;'>
+            {last_html}
+        </div>
+        """
+
         self.text_area.setHtml(html_content)
-
-
-        # auto-scroll al final
-        cursor = self.text_area.textCursor()
-        cursor.movePosition(cursor.End)
-        self.text_area.setTextCursor(cursor)
-        self.text_area.ensureCursorVisible()
 
 
 # ==============================
