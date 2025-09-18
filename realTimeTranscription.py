@@ -7,7 +7,7 @@ import noisereduce as nr
 import torch
 from collections import deque
 
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -89,18 +89,16 @@ def is_voice(x: np.ndarray, threshold=rms_threshold):
 # INTERFAZ
 # ==============================
 class STTApp(QWidget):
-    # señal para enviar nuevo segmento a la UI (seguro desde hilos)
     new_segment = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
-
         self.all_texts = []   # historial de frases
 
         # ==============================
         # CONFIGURACIÓN UI
         # ==============================
-        FONT_SIZE = 35
+        FONT_SIZE = 25
         WINDOW_TITLE = "Live Translation"
         ICON_PATH = "LogoSquare.png"
 
@@ -111,7 +109,6 @@ class STTApp(QWidget):
         BTN_BG_COLOR = "#1a7439"
         BTN_TEXT_COLOR = "#ffffff"
 
-        # color de resaltado (usamos el del botón para coherencia)
         self.HIGHLIGHT_COLOR = BTN_BG_COLOR
 
         # ==============================
@@ -124,22 +121,37 @@ class STTApp(QWidget):
         layout = QVBoxLayout()
 
         # ==============================
-        # ÁREA DE TEXTO
+        # HISTORIAL (arriba, scrollable)
         # ==============================
-        self.text_area = QTextEdit()
-        self.text_area.setReadOnly(True)
-        self.text_area.setFont(QFont("Tahoma", FONT_SIZE))
-        self.text_area.setStyleSheet(f"""
+        self.history_area = QTextEdit()
+        self.history_area.setReadOnly(True)
+        self.history_area.setFont(QFont("Tahoma", 20))
+        self.history_area.setStyleSheet(f"""
             background-color: {TEXT_BG_COLOR};
-            color: {TEXT_COLOR};
+            color: #BFBFBF;
             border: 2px solid white;
-            border-radius: 15px;
-            padding: 15px;
+            border-radius: 10px;
+            padding: 10px;
         """)
-        layout.addWidget(self.text_area)
+        layout.addWidget(self.history_area, stretch=2)   # el 2 da más espacio al historial
 
         # ==============================
-        # BOTÓN
+        # TEXTO RESALTADO (caja blanca, justo encima del botón)
+        # ==============================
+        self.highlight_area = QTextEdit()
+        self.highlight_area.setReadOnly(True)
+        self.highlight_area.setFont(QFont("Tahoma", 90, QFont.Bold))
+        self.highlight_area.setStyleSheet(f"""
+            background-color: {TEXT_BG_COLOR};
+            color: {self.HIGHLIGHT_COLOR};
+            border: 2px solid white;
+            border-radius: 10px;
+            padding: 15px;
+        """)
+        layout.addWidget(self.highlight_area, stretch=1)  # ocupa más espacio dinámico que el botón
+
+        # ==============================
+        # BOTÓN START/STOP
         # ==============================
         self.btn_start = QPushButton("Start")
         self.btn_start.setFont(QFont("Tahoma", FONT_SIZE))
@@ -150,7 +162,9 @@ class STTApp(QWidget):
             padding: 10px;
         """)
         self.btn_start.clicked.connect(self.toggle_stt)
-        layout.addWidget(self.btn_start)
+        layout.addWidget(self.btn_start, stretch=0)   # el botón no crece
+
+
 
         # ==============================
         # APLICAR LAYOUT
@@ -171,22 +185,18 @@ class STTApp(QWidget):
         if not self.running:
             self.running = True
             self.btn_start.setText("Stop")
-            # limpia buffers/colas al iniciar
             audio_buffer = []
             self._flush_queue(audio_queue)
 
             self.thread_recorder = threading.Thread(target=self.recorder, daemon=True)
             self.thread_transcriber = threading.Thread(target=self.transcriber, daemon=True)
-            self.thread_reccriber = self.thread_recorder  # typo guard, not used but fine
             self.thread_recorder.start()
             self.thread_transcriber.start()
         else:
             self.running = False
             self.btn_start.setText("Start")
-            # opcional: vaciar cola para que se detenga rápido
             self._flush_queue(audio_queue)
 
-    # util para limpiar colas
     def _flush_queue(self, q: queue.Queue):
         try:
             while True:
@@ -220,16 +230,13 @@ class STTApp(QWidget):
             total_frames = sum(len(b) for b in audio_buffer)
 
             if total_frames >= frames_per_chunk:
-                # concatenar y mantener overlap
                 audio_data = np.concatenate(audio_buffer)[:frames_per_chunk]
                 audio_buffer = [audio_data[-overlap_frames:]]
                 audio_data = audio_data.flatten().astype(np.float32)
 
-                # limpieza
                 audio_data = remove_dc_and_normalize(audio_data, target=target_rms)
                 audio_data = apply_noise_reduction(audio_data)
 
-                # VAD
                 wav_tensor = torch.from_numpy(audio_data)
                 timestamps = get_speech_timestamps(
                     wav_tensor, vad_model, sampling_rate=samplerate,
@@ -249,7 +256,6 @@ class STTApp(QWidget):
                 if len(speech_np) < int(0.5 * samplerate):
                     continue
 
-                # Whisper
                 segments, _ = model.transcribe(
                     speech_np,
                     task=whisper_task,
@@ -263,7 +269,6 @@ class STTApp(QWidget):
                         break
 
                     text = seg.text.strip()
-                    # filtros
                     if seg.no_speech_prob and seg.no_speech_prob > no_speech_prob_thresh:
                         continue
                     words = text.split()
@@ -276,41 +281,31 @@ class STTApp(QWidget):
                         continue
 
                     recent_texts.append(text)
-                    # emitir a la UI de forma segura
                     self.new_segment.emit(text)
 
     # ==============================
-    # SLOT: Manejar nuevo segmento (UI thread)
+    # SLOT UI
     # ==============================
     def handle_new_segment(self, text: str):
-        # guardar historial
         self.all_texts.append(text)
 
-        # anteriores → se apilan arriba (más chicos y grises)
-        previous_html = ""
+        # historial arriba
+        history_html = ""
         for t in self.all_texts[:-1]:
-            previous_html += f"<p style='color:#888888; font-size:25px; margin:2px 0;'>{t}</p>"
+            history_html += f"<p style='margin:2px 0;'>{t}</p>"
+        self.history_area.setHtml(history_html)
 
-        # último → siempre fijo en el centro
-        last_html = f"""
-        <div style='display:flex; justify-content:center; align-items:center; height:100%;'>
-            <p style='color:{self.HIGHLIGHT_COLOR}; font-weight:bold; font-size:50px; text-align:center;'>
-                {self.all_texts[-1]}
-            </p>
-        </div>
-        """
+        # 🔽 auto-scroll al final
+        cursor = self.history_area.textCursor()
+        cursor.movePosition(cursor.End)
+        self.history_area.setTextCursor(cursor)
+        self.history_area.ensureCursorVisible()
 
-        # construir el contenido final
-        html_content = f"""
-        <div style='height:35%; overflow-y:auto;'>
-            {previous_html}
-        </div>
-        <div style='height:65%; display:flex; justify-content:center; align-items:center;'>
-            {last_html}
-        </div>
-        """
+        # texto resaltado en caja blanca dinámica
+        self.highlight_area.setHtml(
+            f"<p style='color:{self.HIGHLIGHT_COLOR}; font-weight:bold; font-size:90px; text-align:center;'>{self.all_texts[-1]}</p>"
+        )
 
-        self.text_area.setHtml(html_content)
 
 
 # ==============================
@@ -319,5 +314,5 @@ class STTApp(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = STTApp()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec_())
