@@ -25,6 +25,7 @@ pip install...
     keyboard
     faster-whisper
     silero-vad
+    PyQT5 --> UI
 
 ########################################
 # 🔊 PREPROCESAMIENTO - Opcionales
