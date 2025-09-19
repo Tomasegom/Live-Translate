@@ -295,7 +295,7 @@ class STTApp(QWidget):
             history_html += f"<p style='margin:2px 0;'>{t}</p>"
         self.history_area.setHtml(history_html)
 
-        # 🔽 auto-scroll al final
+        # auto-scroll al final
         cursor = self.history_area.textCursor()
         cursor.movePosition(cursor.End)
         self.history_area.setTextCursor(cursor)
