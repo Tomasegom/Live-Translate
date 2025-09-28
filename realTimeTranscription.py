@@ -9,7 +9,7 @@ from collections import deque
 
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QFileDialog
 from PyQt5.QtGui import QFont, QIcon
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
 from faster_whisper import WhisperModel
 from silero_vad import get_speech_timestamps, collect_chunks
@@ -195,6 +195,14 @@ class STTApp(QWidget):
         # conectar señal a slot UI
         self.new_segment.connect(self.handle_new_segment)
         
+        # === Calibración automática ===
+        self.noise_samples = deque(maxlen=200)   # guarda RMS de silencios recientes
+        self.calib_timer = QTimer(self)
+        self.calib_timer.setInterval(60_000)     # 60 segundos
+        self.calib_timer.timeout.connect(self.auto_recalibrate)
+        self.calib_timer.start()
+
+        
     def save_history_to_file(self): #Para guardar el historial en un .txt
         if not self.all_texts:
             return  # si no hay nada, no guardamos
@@ -261,6 +269,8 @@ class STTApp(QWidget):
                 audio_data = np.concatenate(audio_buffer)[:frames_per_chunk]
                 audio_buffer = [audio_data[-overlap_frames:]]
                 audio_data = audio_data.flatten().astype(np.float32)
+                
+                raw_rms = float(np.sqrt(np.mean(audio_data**2))) + 1e-12
 
                 audio_data = remove_dc_and_normalize(audio_data, target=target_rms)
                 audio_data = apply_noise_reduction(audio_data)
@@ -273,15 +283,22 @@ class STTApp(QWidget):
                     min_silence_duration_ms=silero_min_silence_ms
                 )
                 if not timestamps:
+                    self.noise_samples.append(raw_rms)
                     continue
                 speech_tensor = collect_chunks(timestamps, wav_tensor)
+                
                 if speech_tensor.numel() == 0:
+                    self.noise_samples.append(raw_rms)
                     continue
                 speech_np = speech_tensor.numpy().astype(np.float32)
                 speech_np = remove_dc_and_normalize(speech_np, target=target_rms)
+                
                 if not is_voice(speech_np):
+                    self.noise_samples.append(raw_rms)
                     continue
+                
                 if len(speech_np) < int(0.5 * samplerate):
+                    self.noise_samples.append(raw_rms)
                     continue
 
                 segments, _ = model.transcribe(
@@ -333,8 +350,26 @@ class STTApp(QWidget):
         self.highlight_area.setHtml(
             f"<p style='color:{self.HIGHLIGHT_COLOR}; font-weight:bold; font-size:90px; text-align:center;'>{self.all_texts[-1]}</p>"
         )
+    
+    def auto_recalibrate(self):
+        """Ajusta umbrales en función del ruido mediano reciente."""
+        global rms_threshold, target_rms, no_speech_prob_thresh
 
+        if len(self.noise_samples) < 10:
+            return  # no hay suficientes samples
 
+        noise_med = float(np.median(self.noise_samples))
+
+        # Calcula nuevos valores con límites seguros
+        new_rms_threshold = np.clip(noise_med * 3.0, 0.015, 0.08)
+        new_target_rms    = np.clip(max(0.06, noise_med * 5.0), 0.06, 0.14)
+
+        # Ayuda a Whisper en ambientes más ruidosos
+        new_no_speech = 0.75 if noise_med < 0.02 else 0.80
+
+        rms_threshold = float(new_rms_threshold)
+        target_rms = float(new_target_rms)
+        no_speech_prob_thresh = float(new_no_speech)
 
 # ==============================
 # MAIN
