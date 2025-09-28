@@ -7,13 +7,14 @@ import noisereduce as nr
 import torch
 from collections import deque
 
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QLabel, QFileDialog
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtCore import Qt, pyqtSignal
 
 from faster_whisper import WhisperModel
 from silero_vad import get_speech_timestamps, collect_chunks
 
+# CODE TAKES APPROXIMATELY ~17 SECONDS TO LAUNCH
 
 # ==============================
 # CONFIGURACIÓN STT
@@ -25,19 +26,19 @@ overlap_seconds = 0.5
 channels = 1
 
 use_noise_reduction = True
-target_rms = 0.06
-rms_threshold = 0.035
+target_rms = 0.08
+rms_threshold = 0.065
 
 silero_threshold = 0.70
-silero_min_speech_ms = 400
+silero_min_speech_ms = 750
 silero_min_silence_ms = 500
 
 whisper_task = "translate"   # "translate" = inglés, "transcribe" = mismo idioma
 whisper_lang = "es"
 
-no_speech_prob_thresh = 0.60
+no_speech_prob_thresh = 0.75
 unique_ratio_thresh = 0.50
-dedupe_window = 4
+dedupe_window = 3
 
 frames_per_block = int(samplerate * block_duration)
 frames_per_chunk = int(samplerate * chunk_duration)
@@ -125,10 +126,10 @@ class STTApp(QWidget):
         # ==============================
         self.history_area = QTextEdit()
         self.history_area.setReadOnly(True)
-        self.history_area.setFont(QFont("Tahoma", 20))
+        self.history_area.setFont(QFont("Tahoma", 25))
         self.history_area.setStyleSheet(f"""
             background-color: {TEXT_BG_COLOR};
-            color: #BFBFBF;
+            color: #000000;
             border: 2px solid white;
             border-radius: 10px;
             padding: 10px;
@@ -141,6 +142,7 @@ class STTApp(QWidget):
         self.highlight_area = QTextEdit()
         self.highlight_area.setReadOnly(True)
         self.highlight_area.setFont(QFont("Tahoma", 90, QFont.Bold))
+        self.highlight_area.setPlaceholderText("Live Translation")
         self.highlight_area.setStyleSheet(f"""
             background-color: {TEXT_BG_COLOR};
             color: {self.HIGHLIGHT_COLOR};
@@ -164,6 +166,19 @@ class STTApp(QWidget):
         self.btn_start.clicked.connect(self.toggle_stt)
         layout.addWidget(self.btn_start, stretch=0)   # el botón no crece
 
+        # ==============================
+        # BOTÓN GUARDAR HISTORIAL
+        # ==============================
+        self.btn_save = QPushButton("Save")
+        self.btn_save.setFont(QFont("Tahoma", FONT_SIZE))
+        self.btn_save.setStyleSheet("""
+            background-color: #1177bb;
+            color: white;
+            border-radius: 25px;
+            padding: 10px;
+        """)
+        self.btn_save.clicked.connect(self.save_history_to_file)
+        layout.addWidget(self.btn_save, stretch=0)
 
 
         # ==============================
@@ -179,6 +194,19 @@ class STTApp(QWidget):
 
         # conectar señal a slot UI
         self.new_segment.connect(self.handle_new_segment)
+        
+    def save_history_to_file(self): #Para guardar el historial en un .txt
+        if not self.all_texts:
+            return  # si no hay nada, no guardamos
+
+        # abrir diálogo para elegir archivo
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Guardar historial", "historial.txt", "Text Files (*.txt)"
+        )
+        if filename:
+            with open(filename, "w", encoding="utf-8") as f:
+                for line in self.all_texts:
+                    f.write(line + "\n")
 
     def toggle_stt(self):
         global audio_buffer
