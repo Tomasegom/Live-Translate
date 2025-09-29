@@ -20,18 +20,18 @@ from silero_vad import get_speech_timestamps, collect_chunks
 # CONFIGURACIÓN STT
 # ==============================
 samplerate = 16000
-block_duration = 0.35
-chunk_duration = 3
+block_duration = 0.5
+chunk_duration = 4
 overlap_seconds = 0.5
 channels = 1
 
 use_noise_reduction = True
-target_rms = 0.08
+target_rms = 0.080
 rms_threshold = 0.065
 
 silero_threshold = 0.70
-silero_min_speech_ms = 750
-silero_min_silence_ms = 500
+silero_min_speech_ms = 800
+silero_min_silence_ms = 450
 
 whisper_task = "translate"   # "translate" = inglés, "transcribe" = mismo idioma
 whisper_lang = "es"
